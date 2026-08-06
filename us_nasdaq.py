@@ -247,7 +247,7 @@ if __name__ == '__main__':
 
   print('\n--- スクリーニング完了 ---')
 
-  if results:
+if results:
     result_df = pd.DataFrame(results)
     filename = f"swing_candidates_NASDAQ_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     result_df.to_csv(filename, index=False, encoding='utf-8-sig')
