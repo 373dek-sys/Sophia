@@ -2,12 +2,11 @@ name: Stock Screener Automation & Commit
 
 on:
   schedule:
-    # 毎日日本時間の朝8時（UTCの23時）に自動実行
     - cron: '0 23 * * 1-5'
   workflow_dispatch: # 手動実行ボタン
 
 permissions:
-  contents: write # リポジトリへの書き込み権限（自動保存に必須）
+  contents: write # リポジトリへの書き込み権限（これがないと自動保存できません）
 
 jobs:
   run-screener:
@@ -36,8 +35,8 @@ jobs:
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.io"
           
-          # 生成されたCSVファイルをGitの管理対象に追加
+          # 生成されたすべてのCSVファイルをステージングに追加
           git add *.csv
           
-          # 変更がある場合のみコミット＆プッシュする
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update screening CSV results [skip ci]" && git push)
+          # 変更がある場合のみ、自動コミットしてGitHubにプッシュする
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update screening CSV results" && git push)
