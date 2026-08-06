@@ -148,7 +148,7 @@ if __name__ == '__main__':
 
   print('\n--- スクリーニング完了 ---')
 
-  # 2. 結果のCSV保存
+# 2. 結果のCSV保存
   if results:
     result_df = pd.DataFrame(results)
     target_name = MARKET_TARGET if MARKET_TARGET else 'ALL'
