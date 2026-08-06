@@ -6,7 +6,7 @@ on:
   workflow_dispatch: # 手動実行ボタン
 
 permissions:
-  contents: write # リポジトリへの書き込み権限（これがないと自動保存できません）
+  contents: write # リポジトリへの書き込み権限
 
 jobs:
   run-screener:
