@@ -22,9 +22,11 @@ jobs:
         run: |
           pip install pandas yfinance requests openpyxl lxml html5lib
 
-      - name: Run script
+      - name: Run scripts
         run: |
-          python main.py
+                python us_sp500.py
+                python us_nasdaq.py
+                python jp_stock.py
 
       - name: Save results
         uses: actions/upload-artifact@v4
