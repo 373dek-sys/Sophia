@@ -1,10 +1,13 @@
-name: Stock Screener Automation
+name: Stock Screener Automation & Commit
 
 on:
   schedule:
-    # 毎日日本時間の朝8時（UTCの23時）に自動実行する場合
+    # 毎日日本時間の朝8時（UTCの23時）に自動実行
     - cron: '0 23 * * 1-5'
-  workflow_dispatch: # 手動でもいつでも実行できるボタンを追加
+  workflow_dispatch: # 手動実行ボタン
+
+permissions:
+  contents: write # リポジトリへの書き込み権限（自動保存に必須）
 
 jobs:
   run-screener:
@@ -24,12 +27,17 @@ jobs:
 
       - name: Run scripts
         run: |
-                python us_sp500.py
-                python us_nasdaq.py
-                python jp_stock.py
+          python us_sp500.py
+          python us_nasdaq.py
+          python jp_stock.py
 
-      - name: Save results
-        uses: actions/upload-artifact@v4
-        with:
-          name: screening-results
-          path: '*.csv'
+      - name: Commit and push CSV results
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.io"
+          
+          # 生成されたCSVファイルをGitの管理対象に追加
+          git add *.csv
+          
+          # 変更がある場合のみコミット＆プッシュする
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update screening CSV results [skip ci]" && git push)
