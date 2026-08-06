@@ -22,7 +22,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install pandas yfinance requests openpyxl lxml html5lib
+          pip install pandas yfinance requests openpyxl lxml html5lib xlrd
 
       - name: Run scripts
         run: |
