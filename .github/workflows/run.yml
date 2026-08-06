@@ -1,0 +1,33 @@
+name: Stock Screener Automation
+
+on:
+  schedule:
+    # 毎日日本時間の朝8時（UTCの23時）に自動実行する場合
+    - cron: '0 23 * * 1-5'
+  workflow_dispatch: # 手動でもいつでも実行できるボタンを追加
+
+jobs:
+  run-screener:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install pandas yfinance requests openpyxl lxml html5lib
+
+      - name: Run script
+        run: |
+          python main.py
+
+      - name: Save results
+        uses: actions/upload-artifact@v4
+        with:
+          name: screening-results
+          path: '*.csv'
