@@ -144,10 +144,11 @@ if __name__ == '__main__':
 
     print('\n--- スクリーニング完了 ---')
 
-    # 2. 結果のCSV保存
+# 2. 結果のCSV保存
     if results:
         result_df = pd.DataFrame(results)
-        filename = f"swing_candidates_SP500_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        # 毎回同じファイル名で上書き保存する
+        filename = "us_sp500_results.csv"
         result_df.to_csv(filename, index=False, encoding='utf-8-sig')
         print(f'抽出結果（{len(results)}件）をCSVファイルに保存しました: {filename}')
     else:
