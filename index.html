@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>S&P 500 スイングトレード候補</title>
+    <style>
+        :root {
+            --primary-color: #1e293b;
+            --accent-color: #3b82f6;
+            --bg-color: #f8fafc;
+            --card-bg: #ffffff;
+            --text-color: #334155;
+            --border-color: #e2e8f0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            margin: 0;
+            padding: 16px;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+
+        header {
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 1.4rem;
+            color: var(--primary-color);
+            margin: 0 0 8px 0;
+        }
+
+        .status {
+            font-size: 0.85rem;
+            color: #64748b;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+            overflow: hidden;
+            border: 1px solid var(--border-color);
+        }
+
+        .table-responsive {
+            width: 100%;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            white-space: nowrap;
+            text-align: left;
+        }
+
+        th, td {
+            padding: 12px 16px;
+            font-size: 0.9rem;
+        }
+
+        th {
+            background-color: var(--primary-color);
+            color: white;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+        }
+
+        /* 数値列は右揃えにすると見やすい */
+        th:nth-child(n+2), td:nth-child(n+2) {
+            text-align: right;
+        }
+
+        tr:nth-child(even) {
+            background-color: #f8fafc;
+        }
+
+        tr:hover {
+            background-color: #f1f5f9;
+        }
+
+        /* 読み込み中・エラーメッセージ */
+        .message {
+            text-align: center;
+            padding: 40px;
+            color: #64748b;
+            font-size: 0.95rem;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <header>
+            <h1>S&P 500 スイングトレード候補</h1>
+            <div id="update-time" class="status">GitHubから最新データを読み込んでいます...</div>
+        </header>
+
+        <div class="card">
+            <div class="table-responsive" id="table-container">
+                <div class="message">データを取得中...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ★ご自身のGitHubのRaw URLに書き換えてください
+        const csvUrl = "https://raw.githubusercontent.com/あなたのユーザー名/リポジトリ名/main/swing_candidates_SP500_20260806_115837.csv";
+
+        fetch(csvUrl)
+            .then(response => {
+                if (!response.ok) throw new Error("ネットワークエラー");
+                return response.text();
+            })
+            .then(data => {
+                createTable(data);
+                document.getElementById('update-time').textContent = "最終更新: " + new Date().toLocaleString('ja-JP');
+            })
+            .catch(error => {
+                document.getElementById('table-container').innerHTML = 
+                    '<div class="message" style="color: #ef4444;">データの読み込みに失敗しました。URLやファイル名をご確認ください。</div>';
+                console.error(error);
+            });
+
+        function parseCSV(text) {
+            // 簡易CSVパーサー（ダブルクォーテーションやカンマに対応）
+            let lines = text.trim().split('\n');
+            return lines.map(line => {
+                let row = [];
+                let inQuotes = false;
+                let entry = '';
+                for (let i = 0; i < line.length; i++) {
+                    let char = line[i];
+                    if (char === '"' && (i === 0 || line[i-1] !== '\\')) {
+                        inQuotes = !inQuotes;
+                    } else if (char === ',' && !inQuotes) {
+                        row.push(entry.trim());
+                        entry = '';
+                    } else {
+                        entry += char;
+                    }
+                }
+                row.push(entry.trim());
+                return row.map(cell => cell.replace(/^"|"$/g, ''));
+            });
+        }
+
+        function createTable(csvText) {
+            const rows = parseCSV(csvText);
+            if (rows.length === 0 || rows[0].length === 1) {
+                document.getElementById('table-container').innerHTML = '<div class="message">データが空です。</div>';
+                return;
+            }
+
+            let html = '<table>';
+            rows.forEach((cols, index) => {
+                html += '<tr>';
+                cols.forEach(col => {
+                    if (index === 0) {
+                        html += `<th>${col}</th>`;
+                    } else {
+                        html += `<td>${col}</td>`;
+                    }
+                });
+                html += '</tr>';
+            });
+            html += '</table>';
+            
+            document.getElementById('table-container').innerHTML = html;
+        }
+    </script>
+
+</body>
+</html>
