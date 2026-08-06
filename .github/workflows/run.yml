@@ -1,12 +1,9 @@
-name: Stock Screener Automation & Commit
+name: Stock Screener Automation
 
 on:
   schedule:
     - cron: '0 23 * * 1-5'
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   run-screener:
@@ -14,9 +11,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-        with:
-          persist-credentials: true
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -33,13 +27,9 @@ jobs:
           python us_nasdaq.py
           python jp_stock.py
 
-      - name: Commit and push CSV results
-        run: |
-          git config --global user.name "github-actions[bot]"
-          git config --global user.email "github-actions[bot]@users.noreply.github.io"
-          
-          # 変更状況を確認してCSVを強制追加
-          git add -f *.csv
-          
-          # 変更がある場合のみコミット＆プッシュを実行
-          git diff --staged --quiet || (git commit -m "Auto-update screening CSV results" && git push)
+      - name: Upload CSV results as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: stock-screener-results
+          path: |
+            *.csv
