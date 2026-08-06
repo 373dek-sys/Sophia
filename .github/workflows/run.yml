@@ -3,10 +3,10 @@ name: Stock Screener Automation & Commit
 on:
   schedule:
     - cron: '0 23 * * 1-5'
-  workflow_dispatch: # 手動実行ボタン
+  workflow_dispatch:
 
 permissions:
-  contents: write # リポジトリへの書き込み権限
+  contents: write
 
 jobs:
   run-screener:
@@ -30,13 +30,9 @@ jobs:
           python us_nasdaq.py
           python jp_stock.py
 
-- name: Commit and push CSV results
+      - name: Commit and push CSV results
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.io"
-          
-          # 強制的にCSVファイルをステージングに追加（Gitの除外設定を無視して追加）
           git add -f *.csv
-          
-          # 変更がある場合のみ、自動コミットして明示的にmainブランチへプッシュする
           git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update screening CSV results" && git push origin HEAD:main)
