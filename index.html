@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>S&P 500 スイングトレード候補</title>
+    <title>株価スクリーニング結果ビューア</title>
     <style>
         :root {
             --primary-color: #1e293b;
@@ -35,18 +35,28 @@
         h1 {
             font-size: 1.4rem;
             color: var(--primary-color);
-            margin: 0 0 8px 0;
+            margin: 0 0 12px 0;
         }
 
-        .status {
-            font-size: 0.85rem;
-            color: #64748b;
+        /* ファイル選択ボタンエリアのデザイン */
+        .file-input-box {
+            background: var(--card-bg);
+            padding: 16px;
+            border-radius: 12px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+            margin-bottom: 20px;
+            border: 1px solid var(--border-color);
+            display: inline-block;
+        }
+
+        input[type="file"] {
+            font-size: 0.9rem;
         }
 
         .card {
             background: var(--card-bg);
             border-radius: 12px;
-            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.03);
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
             overflow: hidden;
             border: 1px solid var(--border-color);
         }
@@ -73,10 +83,8 @@
             background-color: var(--primary-color);
             color: white;
             font-weight: 600;
-            letter-spacing: 0.05em;
         }
 
-        /* 数値列は右揃えにすると見やすい */
         th:nth-child(n+2), td:nth-child(n+2) {
             text-align: right;
         }
@@ -89,7 +97,6 @@
             background-color: #f1f5f9;
         }
 
-        /* 読み込み中・エラーメッセージ */
         .message {
             text-align: center;
             padding: 40px;
@@ -102,38 +109,43 @@
 
     <div class="container">
         <header>
-            <h1>S&P 500 スイングトレード候補</h1>
-            <div id="update-time" class="status">GitHubから最新データを読み込んでいます...</div>
+            <h1>株価スクリーニング結果ビューア</h1>
+            <div class="file-input-box">
+                <label for="csvFileInput">CSVファイルを選択: </label>
+                <input type="file" id="csvFileInput" accept=".csv">
+            </div>
         </header>
 
         <div class="card">
             <div class="table-responsive" id="table-container">
-                <div class="message">データを取得中...</div>
+                <div class="message">上のボタンからCSVファイルを選択してください。</div>
             </div>
         </div>
     </div>
 
     <script>
-        // ★ご自身のGitHubのRaw URLに書き換えてください
-        const csvUrl = "https://raw.githubusercontent.com/あなたのユーザー名/リポジトリ名/main/swing_candidates_SP500_20260806_115837.csv";
+        const fileInput = document.getElementById('csvFileInput');
 
-        fetch(csvUrl)
-            .then(response => {
-                if (!response.ok) throw new Error("ネットワークエラー");
-                return response.text();
-            })
-            .then(data => {
-                createTable(data);
-                document.getElementById('update-time').textContent = "最終更新: " + new Date().toLocaleString('ja-JP');
-            })
-            .catch(error => {
+        fileInput.addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            // 日本語の文字化けを防ぐため Shift_JIS または UTF-8 に対応
+            reader.readAsText(file, 'UTF-8');
+
+            reader.onload = function(event) {
+                const csvText = event.target.result;
+                createTable(csvText);
+            };
+
+            reader.onerror = function() {
                 document.getElementById('table-container').innerHTML = 
-                    '<div class="message" style="color: #ef4444;">データの読み込みに失敗しました。URLやファイル名をご確認ください。</div>';
-                console.error(error);
-            });
+                    '<div class="message" style="color: #ef4444;">ファイルの読み込みに失敗しました。</div>';
+            };
+        });
 
         function parseCSV(text) {
-            // 簡易CSVパーサー（ダブルクォーテーションやカンマに対応）
             let lines = text.trim().split('\n');
             return lines.map(line => {
                 let row = [];
