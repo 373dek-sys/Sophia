@@ -5,6 +5,9 @@ on:
     - cron: '0 23 * * 1-5'
   workflow_dispatch:
 
+permissions:
+  contents: write  # リポジトリへの書き込み権限を許可
+
 jobs:
   run-screener:
     runs-on: ubuntu-latest
@@ -27,10 +30,10 @@ jobs:
           python us_nasdaq.py
           python jp_stock.py
 
-      - name: Upload CSV results as artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: stock-screener-results
-          path: |
-            *.csv
-            
+      - name: Commit and push generated CSVs
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add *.csv
+          # 変更がある場合のみコミット＆プッシュ
+          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update screening CSV results [skip ci]" && git push)
