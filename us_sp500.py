@@ -59,7 +59,7 @@ def check_swing_signal(ticker_symbol: str):
         )
         if df.empty or len(df) < 100:  # 200 -> 100日に緩和
             return None
-        
+
         # 列名のフォーマット調整（yfinanceの仕様差異対策）
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
@@ -99,7 +99,7 @@ def check_swing_signal(ticker_symbol: str):
 
         # 押し目判定: 25日線の3%以内まで近づいたら押し目とみなす
         is_dip = (prev_low <= sma25 * 1.03) and (close_price >= sma25 * 0.98)
-        
+
         has_liquidity = trading_value_sma20 >= MIN_TRADING_VALUE_USD
         is_volume_up = vol_latest >= vol_sma20 * MIN_VOL_RATIO
         is_rsi_proper = RSI_MIN <= rsi_latest <= RSI_MAX
@@ -144,10 +144,9 @@ if __name__ == '__main__':
 
     print('\n--- スクリーニング完了 ---')
 
-# 2. 結果のCSV保存
+    # 2. 結果のCSV保存
     if results:
         result_df = pd.DataFrame(results)
-        # 毎回同じファイル名で上書き保存する
         filename = "us_sp500_results.csv"
         result_df.to_csv(filename, index=False, encoding='utf-8-sig')
         print(f'抽出結果（{len(results)}件）をCSVファイルに保存しました: {filename}')
