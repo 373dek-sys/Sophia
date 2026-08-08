@@ -8,16 +8,16 @@ import yfinance as yf
 logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 
 # ==========================================
-# 設定項目（日本株用・緩和版）
+# 設定項目（日本株用・絞り込み厳格化版）
 # ==========================================
 # 対象市場: 'プライム', 'スタンダード', 'グロース', または None (全市場対象)
 MARKET_TARGET = 'プライム'
 
-# フィルター条件
-MIN_TRADING_VALUE = 300_000_000  # 最低売買代金（20日平均3億円以上）
-MIN_VOL_RATIO = 1.10  # 出来高増加率（1.2 -> 1.10倍に緩和）
-RSI_MIN = 40  # RSIの下限
-RSI_MAX = 70  # RSIの上限（65 -> 70に拡大）
+# フィルター条件（厳格化）
+MIN_TRADING_VALUE = 1_000_000_000  # 最低売買代金（20日平均 10億円以上に厳格化）
+MIN_VOL_RATIO = 1.30  # 出来高増加率（1.10 -> 1.30倍に厳格化）
+RSI_MIN = 45  # RSIの下限（40 -> 45に調整）
+RSI_MAX = 62  # RSIの上限（70 -> 62に絞り込み）
 TAKE_PROFIT_RATIO = 1.05  # 目標利確（+5%）
 STOP_LOSS_RATIO = 0.96  # 損切り（-4%）
 
@@ -62,14 +62,14 @@ def check_swing_signal(ticker_symbol: str):
             multi_level_index=False,
             progress=False,
         )
-        if df.empty or len(df) < 100:  # 必要データ数を200->100日に緩和
+        if df.empty or len(df) < 100:
             return None
 
-        # 列名のフォーマット調整（yfinanceの仕様差異対策）
+        # 列名のフォーマット調整
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
 
-        # 1. 移動平均線（25日, 75日）※200日線は除外
+        # 1. 移動平均線（25日, 75日）
         df['SMA25'] = df['Close'].rolling(window=25).mean()
         df['SMA75'] = df['Close'].rolling(window=75).mean()
 
@@ -96,12 +96,12 @@ def check_swing_signal(ticker_symbol: str):
         trading_value_sma20 = float(latest['Trading_Value_SMA20'])
         rsi_latest = float(latest['RSI'])
 
-        # --- 判定条件の緩和 ---
-        # トレンド判定: 25日線 > 75日線（短期中期上昇）に緩和
+        # --- 判定条件の厳格化 ---
+        # トレンド判定: 25日線 > 75日線（短期中期上昇）
         is_uptrend = sma25 > sma75
 
-        # 押し目判定: 25日線の3%以内まで近づいたら押し目とみなす
-        is_dip = (prev_low <= sma25 * 1.03) and (close_price >= sma25 * 0.98)
+        # 押し目判定: 25日線の1.5%以内まで引きつけた押し目（3% -> 1.5%に縮小）
+        is_dip = (prev_low <= sma25 * 1.015) and (close_price >= sma25 * 0.985)
 
         has_liquidity = trading_value_sma20 >= MIN_TRADING_VALUE
         is_volume_up = vol_latest >= vol_sma20 * MIN_VOL_RATIO
@@ -148,7 +148,7 @@ if __name__ == '__main__':
 
     print('\n--- スクリーニング完了 ---')
 
-    # 2. 結果のCSV保存（上書き更新用に固定ファイル名に統一）
+    # 2. 結果のCSV保存
     if results:
         result_df = pd.DataFrame(results)
         filename = "jp_stock_results.csv"
