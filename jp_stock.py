@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import pandas as pd
 import requests
@@ -8,16 +8,17 @@ import yfinance as yf
 logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 
 # ==========================================
-# 設定項目（日本株用・絞り込み厳格化版）
+# 設定項目（日本株用・高精度厳格化版）
 # ==========================================
-# 対象市場: 'プライム', 'スタンダード', 'グロース', または None (全市場対象)
-MARKET_TARGET = 'プライム'
+MARKET_TARGET = 'プライム'  # 対象市場: 'プライム', 'スタンダード', 'グロース', または None
 
-# フィルター条件（厳格化）
-MIN_TRADING_VALUE = 1_000_000_000  # 最低売買代金（20日平均 10億円以上に厳格化）
-MIN_VOL_RATIO = 1.30  # 出来高増加率（1.10 -> 1.30倍に厳格化）
-RSI_MIN = 45  # RSIの下限（40 -> 45に調整）
-RSI_MAX = 62  # RSIの上限（70 -> 62に絞り込み）
+MIN_TRADING_VALUE = 1_000_000_000  # 最低売買代金（20日平均 10億円以上）
+MIN_VOL_RATIO = 1.20  # 出来高増加率（1.2倍以上）
+RSI_MIN = 45  # RSIの下限
+RSI_MAX = 65  # RSIの上限
+HIGH_52W_RATIO = 0.90  # 52週高値からの距離（高値の90%以上＝-10%以内）
+EARNINGS_BUFFER_DAYS = 7  # 決算前後の危険期間（前後7日を除外）
+
 TAKE_PROFIT_RATIO = 1.05  # 目標利確（+5%）
 STOP_LOSS_RATIO = 0.96  # 損切り（-4%）
 
@@ -51,27 +52,41 @@ def get_jpx_tickers(market_filter=None):
         return []
 
 
-def check_swing_signal(ticker_symbol: str):
-    """テクニカル＋流動性＋過熱感の多角フィルターによるシグナル判定"""
+def is_near_earnings(ticker_obj) -> bool:
+    """決算日の前後N日以内かどうかを判定"""
     try:
-        # データの取得（過去1年分）
-        df = yf.download(
-            ticker_symbol,
-            period='1y',
-            interval='1d',
-            multi_level_index=False,
-            progress=False,
-        )
-        if df.empty or len(df) < 100:
+        earnings_df = ticker_obj.earnings_dates
+        if earnings_df is None or earnings_df.empty:
+            return False
+
+        now = pd.Timestamp.now(tz=timezone.utc)
+        # UTCタイムゾーンに合わせて日付計算
+        for index in earnings_df.index:
+            earning_date = pd.to_datetime(index)
+            if earning_date.tzinfo is None:
+                earning_date = earning_date.tz_localize(timezone.utc)
+
+            diff_days = abs((earning_date - now).days)
+            if diff_days <= EARNINGS_BUFFER_DAYS:
+                return True  # 決算前後の危険期間に該当
+    except Exception:
+        pass
+    return False
+
+
+def check_swing_signal(ticker_symbol: str):
+    """高度なテクニカル＋モメンタム＋決算回避フィルター"""
+    try:
+        tk = yf.Ticker(ticker_symbol)
+        df = tk.history(period='1y', interval='1d')
+
+        if df.empty or len(df) < 200:  # 200日移動平均計算用に最長データ必要
             return None
 
-        # 列名のフォーマット調整
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-
-        # 1. 移動平均線（25日, 75日）
+        # 1. 移動平均線（25日, 50日, 200日）
         df['SMA25'] = df['Close'].rolling(window=25).mean()
-        df['SMA75'] = df['Close'].rolling(window=75).mean()
+        df['SMA50'] = df['Close'].rolling(window=50).mean()
+        df['SMA200'] = df['Close'].rolling(window=200).mean()
 
         # 2. 出来高平均（20日）と売買代金
         df['Vol_SMA20'] = df['Volume'].rolling(window=20).mean()
@@ -85,41 +100,58 @@ def check_swing_signal(ticker_symbol: str):
         rs = gain / loss
         df['RSI'] = 100 - (100 / (1 + rs))
 
+        # 4. 52週高値（過去252営業日の最高値）
+        high_52w = df['High'].tail(252).max()
+
         latest = df.iloc[-1]
         prev = df.iloc[-2]
 
-        sma25, sma75 = float(latest['SMA25']), float(latest['SMA75'])
-        close_price, prev_low = float(latest['Close']), float(prev['Low'])
+        close_price = float(latest['Close'])
+        prev_low = float(prev['Low'])
+        sma25 = float(latest['SMA25'])
+        sma50 = float(latest['SMA50'])
+        sma200 = float(latest['SMA200'])
 
         vol_latest = float(latest['Volume'])
         vol_sma20 = float(latest['Vol_SMA20'])
         trading_value_sma20 = float(latest['Trading_Value_SMA20'])
         rsi_latest = float(latest['RSI'])
 
-        # --- 判定条件の厳格化 ---
-        # トレンド判定: 25日線 > 75日線（短期中期上昇）
-        is_uptrend = sma25 > sma75
+        # --- 判定条件 ---
+        # ① トレンド順配列: 株価 > 50日線 かつ 50日線 > 200日線
+        is_uptrend = (close_price > sma50) and (sma50 > sma200)
 
-        # 押し目判定: 25日線の1.5%以内まで引きつけた押し目（3% -> 1.5%に縮小）
-        is_dip = (prev_low <= sma25 * 1.015) and (close_price >= sma25 * 0.985)
+        # ② 52週高値からの距離: -10%以内（高値の90%以上）
+        is_near_52w_high = close_price >= (high_52w * HIGH_52W_RATIO)
 
+        # 押し目判定: 25日移動平均線の2%以内まで調整していること
+        is_dip = (prev_low <= sma25 * 1.02) and (close_price >= sma25 * 0.98)
+
+        # 流動性・出来高・RSI
         has_liquidity = trading_value_sma20 >= MIN_TRADING_VALUE
         is_volume_up = vol_latest >= vol_sma20 * MIN_VOL_RATIO
         is_rsi_proper = RSI_MIN <= rsi_latest <= RSI_MAX
 
+        # すべてのテクニカル条件をクリアした場合のみ、決算日チェックを実行（処理速度最適化のため）
         if (
             is_uptrend
+            and is_near_52w_high
             and is_dip
             and has_liquidity
             and is_volume_up
             and is_rsi_proper
         ):
+            # ③ 決算前後7日以内の銘柄を除外
+            if is_near_earnings(tk):
+                return None
+
             return {
                 'コード': ticker_symbol,
                 '現在株価': round(close_price, 1),
                 'RSI(14)': round(rsi_latest, 1),
                 '出来高倍率': round(vol_latest / vol_sma20, 2),
                 '売買代金(百万円)': round(trading_value_sma20 / 1_000_000, 0),
+                '52週高値比': f'{round((close_price / high_52w) * 100, 1)}%',
                 '目標利確(+5%)': round(close_price * TAKE_PROFIT_RATIO, 1),
                 '損切り(-4%)': round(close_price * STOP_LOSS_RATIO, 1),
             }
@@ -129,11 +161,10 @@ def check_swing_signal(ticker_symbol: str):
 
 
 if __name__ == '__main__':
-    # 1. 銘柄リスト取得
     watch_list = get_jpx_tickers(market_filter=MARKET_TARGET)
 
     results = []
-    print('--- 多角的スクリーニングを開始します ---')
+    print('--- 高精度スクリーニング（トレンド・52週高値・決算回避）を開始します ---')
 
     for i, ticker in enumerate(watch_list, 1):
         print(f'[{i}/{len(watch_list)}] 分析中: {ticker}', end='\r')
@@ -141,14 +172,13 @@ if __name__ == '__main__':
         if signal:
             print(
                 f'\n【買シグナル検知】{signal["コード"]} | 株価:'
-                f' {signal["現在株価"]}円 | RSI: {signal["RSI(14)"]} | 出来高:'
-                f' {signal["出来高倍率"]}倍'
+                f' {signal["現在株価"]}円 | RSI: {signal["RSI(14)"]} | 高値比:'
+                f' {signal["52週高値比"]}'
             )
             results.append(signal)
 
     print('\n--- スクリーニング完了 ---')
 
-    # 2. 結果のCSV保存
     if results:
         result_df = pd.DataFrame(results)
         filename = "jp_stock_results.csv"
