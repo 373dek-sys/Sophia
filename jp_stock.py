@@ -17,6 +17,8 @@ MIN_VOL_RATIO = 1.20  # 出来高増加率（1.2倍以上）
 RSI_MIN = 45  # RSIの下限
 RSI_MAX = 65  # RSIの上限
 HIGH_52W_RATIO = 0.90  # 52週高値からの距離（高値の90%以上＝-10%以内）
+MA50_DEV_MIN = 0.02  # 50日MA乖離率の下限 (+2%)
+MA50_DEV_MAX = 0.10  # 50日MA乖離率の上限 (+10%)
 EARNINGS_BUFFER_DAYS = 7  # 決算前後の危険期間（前後7日を除外）
 
 TAKE_PROFIT_RATIO = 1.05  # 目標利確（+5%）
@@ -60,7 +62,6 @@ def is_near_earnings(ticker_obj) -> bool:
             return False
 
         now = pd.Timestamp.now(tz=timezone.utc)
-        # UTCタイムゾーンに合わせて日付計算
         for index in earnings_df.index:
             earning_date = pd.to_datetime(index)
             if earning_date.tzinfo is None:
@@ -75,7 +76,7 @@ def is_near_earnings(ticker_obj) -> bool:
 
 
 def check_swing_signal(ticker_symbol: str):
-    """高度なテクニカル＋モメンタム＋決算回避フィルター"""
+    """高度なテクニカル＋モメンタム＋決算回避＋50日線乖離率フィルター"""
     try:
         tk = yf.Ticker(ticker_symbol)
         df = tk.history(period='1y', interval='1d')
@@ -117,12 +118,18 @@ def check_swing_signal(ticker_symbol: str):
         trading_value_sma20 = float(latest['Trading_Value_SMA20'])
         rsi_latest = float(latest['RSI'])
 
+        # 50日線乖離率の計算 (株価 / 50日MA - 1)
+        ma50_dev = (close_price / sma50) - 1.0
+
         # --- 判定条件 ---
         # ① トレンド順配列: 株価 > 50日線 かつ 50日線 > 200日線
         is_uptrend = (close_price > sma50) and (sma50 > sma200)
 
         # ② 52週高値からの距離: -10%以内（高値の90%以上）
         is_near_52w_high = close_price >= (high_52w * HIGH_52W_RATIO)
+
+        # ③ 50日線乖離率: +2% 〜 +10%
+        is_proper_ma50_dev = MA50_DEV_MIN <= ma50_dev <= MA50_DEV_MAX
 
         # 押し目判定: 25日移動平均線の2%以内まで調整していること
         is_dip = (prev_low <= sma25 * 1.02) and (close_price >= sma25 * 0.98)
@@ -132,16 +139,17 @@ def check_swing_signal(ticker_symbol: str):
         is_volume_up = vol_latest >= vol_sma20 * MIN_VOL_RATIO
         is_rsi_proper = RSI_MIN <= rsi_latest <= RSI_MAX
 
-        # すべてのテクニカル条件をクリアした場合のみ、決算日チェックを実行（処理速度最適化のため）
+        # すべてのテクニカル条件をクリアした場合のみ決算日チェック
         if (
             is_uptrend
             and is_near_52w_high
+            and is_proper_ma50_dev
             and is_dip
             and has_liquidity
             and is_volume_up
             and is_rsi_proper
         ):
-            # ③ 決算前後7日以内の銘柄を除外
+            # ④ 決算前後7日以内の銘柄を除外
             if is_near_earnings(tk):
                 return None
 
@@ -149,6 +157,7 @@ def check_swing_signal(ticker_symbol: str):
                 'コード': ticker_symbol,
                 '現在株価': round(close_price, 1),
                 'RSI(14)': round(rsi_latest, 1),
+                '50日線乖離率': f'{round(ma50_dev * 100, 1)}%',
                 '出来高倍率': round(vol_latest / vol_sma20, 2),
                 '売買代金(百万円)': round(trading_value_sma20 / 1_000_000, 0),
                 '52週高値比': f'{round((close_price / high_52w) * 100, 1)}%',
@@ -164,7 +173,7 @@ if __name__ == '__main__':
     watch_list = get_jpx_tickers(market_filter=MARKET_TARGET)
 
     results = []
-    print('--- 高精度スクリーニング（トレンド・52週高値・決算回避）を開始します ---')
+    print('--- 高精度スクリーニングを開始します ---')
 
     for i, ticker in enumerate(watch_list, 1):
         print(f'[{i}/{len(watch_list)}] 分析中: {ticker}', end='\r')
@@ -172,8 +181,8 @@ if __name__ == '__main__':
         if signal:
             print(
                 f'\n【買シグナル検知】{signal["コード"]} | 株価:'
-                f' {signal["現在株価"]}円 | RSI: {signal["RSI(14)"]} | 高値比:'
-                f' {signal["52週高値比"]}'
+                f' {signal["現在株価"]}円 | 50日線乖離: {signal["50日線乖離率"]} |'
+                f' RSI: {signal["RSI(14)"]}'
             )
             results.append(signal)
 
