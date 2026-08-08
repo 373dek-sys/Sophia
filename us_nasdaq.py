@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import io
 import logging
 import pandas as pd
@@ -9,21 +9,25 @@ import yfinance as yf
 logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 
 # ==========================================
-# 設定項目（数値調整版）
+# 設定項目（NASDAQ 100用・高精度厳格化版）
 # ==========================================
-MIN_TRADING_VALUE_USD = 5_000_000  # 1日平均売買代金（500万ドル以上）
-MIN_VOL_RATIO = 1.10  # 出来高増加率
-RSI_MIN = 40  # RSI下限
-RSI_MAX = 70  # RSI上限
+# 1日あたりの最低売買代金（20,000,000ドル ＝ 約2000万ドル/日＝約30億円/日以上）
+MIN_TRADING_VALUE_USD = 20_000_000
+MIN_VOL_RATIO = 1.20  # 出来高増加率（1.2倍以上）
+RSI_MIN = 45  # RSIの下限
+RSI_MAX = 65  # RSIの上限
+HIGH_52W_RATIO = 0.90  # 52週高値からの距離（高値の90%以上＝-10%以内）
+EARNINGS_BUFFER_DAYS = 7  # 決算前後の危険期間（前後7日を除外）
+
 TAKE_PROFIT_RATIO = 1.05  # 目標利確（+5%）
 STOP_LOSS_RATIO = 0.96  # 損切り（-4%）
 
 
-def get_nasdaq_100_tickers():
-    """NASDAQ 100の銘柄リストを取得（二重ヘッダー対応＋バックアップ機能付）"""
+def get_nasdaq100_tickers():
+    """NASDAQ 100の構成銘柄リストを取得"""
     print('NASDAQ 100 銘柄リストを取得中...')
     try:
-        url = 'https://en.wikipedia.org/wiki/Nasdaq-100'
+        url = 'https://en.wikipedia.org/wiki/NASDAQ-100'
         headers = {
             'User-Agent': (
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -33,64 +37,62 @@ def get_nasdaq_100_tickers():
         response = requests.get(url, headers=headers)
         tables = pd.read_html(io.StringIO(response.text))
 
-        for df in tables:
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = ['_'.join(map(str, col)).strip() for col in df.columns]
+        # 通常、構成銘柄テーブルは4番目付近に存在（'Ticker' または 'Symbol' カラム）
+        df = None
+        for table in tables:
+            if 'Ticker' in table.columns or 'Symbol' in table.columns:
+                df = table
+                break
 
-            for col in df.columns:
-                col_str = str(col).lower()
-                if 'ticker' in col_str or 'symbol' in col_str:
-                    raw_tickers = df[col].dropna().astype(str).tolist()
-                    tickers = []
-                    for t in raw_tickers:
-                        t_clean = t.strip().replace('.', '-')
-                        if 1 <= len(t_clean) <= 5:
-                            tickers.append(t_clean)
+        if df is None:
+            raise ValueError('銘柄テーブルが見つかりませんでした。')
 
-                    if len(tickers) >= 50:
-                        print(f'取得完了: {len(tickers)} 銘柄')
-                        return tickers
+        col_name = 'Ticker' if 'Ticker' in df.columns else 'Symbol'
+        tickers = df[col_name].tolist()
 
-        raise ValueError('該当するテーブル列が見つかりませんでした。')
-
+        # ドット表記を yfinance 用にハイフンに変換 (例: GOOGL, BRK-B)
+        tickers = [str(t).replace('.', '-') for t in tickers]
+        print(f'取得完了: {len(tickers)} 銘柄')
+        return tickers
     except Exception as e:
-        print(
-            f'WEBからの自動取得に失敗したため、バックアップ銘柄リストを使用します（理由: {e}）'
-        )
-        fallback_tickers = [
-            'AAPL', 'MSFT', 'NVDA', 'AMZN', 'META', 'GOOGL', 'GOOG', 'AVGO', 'TSLA', 'COST',
-            'PEP', 'TMUS', 'CSCO', 'ADBE', 'NFLX', 'AMD', 'AMAT', 'INTC', 'TXN', 'AMGN',
-            'QCOM', 'HON', 'CMCSA', 'INTU', 'BKNG', 'ISRG', 'VRTX', 'SBUX', 'PANW', 'MDLZ',
-            'GILD', 'LRCX', 'REGN', 'ADP', 'ADI', 'MU', 'MELI', 'KLAC', 'PDD', 'SNPS',
-            'CDNS', 'CSX', 'PYPL', 'CRWD', 'MAR', 'ORLY', 'ASML', 'CTAS', 'ROP', 'ROST',
-            'CPRT', 'ADSK', 'PCAR', 'DXCM', 'PAYX', 'FTNT', 'AEP', 'MRVL', 'ODFL', 'CHTR',
-            'MCHP', 'AZN', 'KDP', 'LULU', 'EXC', 'FAST', 'IDXX', 'KHC', 'CSGP', 'BKR',
-            'CTSH', 'GEHC', 'ON', 'VRSK', 'CDW', 'MNST', 'DLTR', 'BIIB', 'TTD', 'CEG',
-            'FANG', 'TEAM', 'MDB', 'ZS', 'ILMN', 'WBD', 'GFS', 'ARM',
-        ]
-        print(f'取得完了: {len(fallback_tickers)} 銘柄（バックアップ機能発動）')
-        return fallback_tickers
+        print(f'NASDAQ 100の取得に失敗しました: {e}')
+        return []
+
+
+def is_near_earnings(ticker_obj) -> bool:
+    """決算日の前後N日以内かどうかを判定"""
+    try:
+        earnings_df = ticker_obj.earnings_dates
+        if earnings_df is None or earnings_df.empty:
+            return False
+
+        now = pd.Timestamp.now(tz=timezone.utc)
+        for index in earnings_df.index:
+            earning_date = pd.to_datetime(index)
+            if earning_date.tzinfo is None:
+                earning_date = earning_date.tz_localize(timezone.utc)
+
+            diff_days = abs((earning_date - now).days)
+            if diff_days <= EARNINGS_BUFFER_DAYS:
+                return True  # 決算前後の危険期間に該当
+    except Exception:
+        pass
+    return False
 
 
 def check_swing_signal(ticker_symbol: str):
-    """テクニカル＋流動性＋過熱感の判定"""
+    """高度なテクニカル＋モメンタム＋決算回避フィルター（米国株版）"""
     try:
-        df = yf.download(
-            ticker_symbol,
-            period='1y',
-            interval='1d',
-            multi_level_index=False,
-            progress=False,
-        )
-        if df.empty or len(df) < 100:
+        tk = yf.Ticker(ticker_symbol)
+        df = tk.history(period='1y', interval='1d')
+
+        if df.empty or len(df) < 200:  # 200日移動平均計算用に最長データ必要
             return None
 
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-
-        # 1. 移動平均線（25日, 75日）
+        # 1. 移動平均線（25日, 50日, 200日）
         df['SMA25'] = df['Close'].rolling(window=25).mean()
-        df['SMA75'] = df['Close'].rolling(window=75).mean()
+        df['SMA50'] = df['Close'].rolling(window=50).mean()
+        df['SMA200'] = df['Close'].rolling(window=200).mean()
 
         # 2. 出来高平均（20日）と売買代金（USD）
         df['Vol_SMA20'] = df['Volume'].rolling(window=20).mean()
@@ -104,38 +106,58 @@ def check_swing_signal(ticker_symbol: str):
         rs = gain / loss
         df['RSI'] = 100 - (100 / (1 + rs))
 
+        # 4. 52週高値（過去252営業日の最高値）
+        high_52w = df['High'].tail(252).max()
+
         latest = df.iloc[-1]
         prev = df.iloc[-2]
 
-        sma25, sma75 = float(latest['SMA25']), float(latest['SMA75'])
         close_price = float(latest['Close'])
         prev_low = float(prev['Low'])
+        sma25 = float(latest['SMA25'])
+        sma50 = float(latest['SMA50'])
+        sma200 = float(latest['SMA200'])
 
         vol_latest = float(latest['Volume'])
         vol_sma20 = float(latest['Vol_SMA20'])
         trading_value_sma20 = float(latest['Trading_Value_SMA20'])
         rsi_latest = float(latest['RSI'])
 
-        # 判定条件
-        is_uptrend = sma25 > sma75
-        is_dip = (prev_low <= sma25 * 1.03) and (close_price >= sma25 * 0.98)
+        # --- 判定条件 ---
+        # ① トレンド順配列: 株価 > 50日線 かつ 50日線 > 200日線
+        is_uptrend = (close_price > sma50) and (sma50 > sma200)
+
+        # ② 52週高値からの距離: -10%以内（高値の90%以上）
+        is_near_52w_high = close_price >= (high_52w * HIGH_52W_RATIO)
+
+        # 押し目判定: 25日移動平均線の2%以内まで調整していること
+        is_dip = (prev_low <= sma25 * 1.02) and (close_price >= sma25 * 0.98)
+
+        # 流動性・出来高・RSI
         has_liquidity = trading_value_sma20 >= MIN_TRADING_VALUE_USD
         is_volume_up = vol_latest >= vol_sma20 * MIN_VOL_RATIO
         is_rsi_proper = RSI_MIN <= rsi_latest <= RSI_MAX
 
+        # すべてのテクニカル条件をクリアした場合のみ、決算日チェックを実行
         if (
             is_uptrend
+            and is_near_52w_high
             and is_dip
             and has_liquidity
             and is_volume_up
             and is_rsi_proper
         ):
+            # ③ 決算前後7日以内の銘柄を除外
+            if is_near_earnings(tk):
+                return None
+
             return {
                 'Ticker': ticker_symbol,
                 '現在株価($)': round(close_price, 2),
                 'RSI(14)': round(rsi_latest, 1),
                 '出来高倍率': round(vol_latest / vol_sma20, 2),
                 '売買代金(M$)': round(trading_value_sma20 / 1_000_000, 1),
+                '52週高値比': f'{round((close_price / high_52w) * 100, 1)}%',
                 '目標利確(+5%)': round(close_price * TAKE_PROFIT_RATIO, 2),
                 '損切り(-4%)': round(close_price * STOP_LOSS_RATIO, 2),
             }
@@ -145,10 +167,11 @@ def check_swing_signal(ticker_symbol: str):
 
 
 if __name__ == '__main__':
-    watch_list = get_nasdaq_100_tickers()
+    # 1. NASDAQ 100 銘柄リスト取得
+    watch_list = get_nasdaq100_tickers()
 
     results = []
-    print('--- ナスダック スクリーニングを開始します ---')
+    print('--- NASDAQ 100 高精度スクリーニングを開始します ---')
 
     for i, ticker in enumerate(watch_list, 1):
         print(f'[{i}/{len(watch_list)}] 分析中: {ticker}', end='\r')
@@ -156,20 +179,17 @@ if __name__ == '__main__':
         if signal:
             print(
                 f'\n【買シグナル】{signal["Ticker"]} | 株価: ${signal["現在株価($)"]}'
-                f' | RSI: {signal["RSI(14)"]} | 出来高: {signal["出来高倍率"]}倍'
+                f' | RSI: {signal["RSI(14)"]} | 52週高値比: {signal["52週高値比"]}'
             )
             results.append(signal)
 
     print('\n--- スクリーニング完了 ---')
 
+    # 2. 結果のCSV保存
     if results:
         result_df = pd.DataFrame(results)
-        # 上書き更新しやすいよう固定ファイル名で出力（必要に応じて日時付きに変更可）
         filename = "us_nasdaq_results.csv"
         result_df.to_csv(filename, index=False, encoding='utf-8-sig')
-        print(
-            f'抽出結果（{len(results)}件）をCSVファイルに保存しました:'
-            f' {filename}'
-        )
+        print(f'抽出結果（{len(results)}件）をCSVファイルに保存しました: {filename}')
     else:
         print('本日条件を満たす銘柄は見つかりませんでした。')
