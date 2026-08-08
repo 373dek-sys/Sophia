@@ -11,13 +11,14 @@ logging.getLogger('yfinance').setLevel(logging.CRITICAL)
 # ==========================================
 # 設定項目（S&P 500用・高精度厳格化版）
 # ==========================================
-# 1日あたりの最低売買代金（20,000,000ドル ＝ 約2000万ドル/日＝約30億円/日以上）
-MIN_TRADING_VALUE_USD = 20_000_000
+MIN_TRADING_VALUE_USD = 20_000_000  # 売買代金2000万ドル/日以上
 MIN_VOL_RATIO = 1.20  # 出来高増加率（1.2倍以上）
 RSI_MIN = 45  # RSIの下限
 RSI_MAX = 65  # RSIの上限
-HIGH_52W_RATIO = 0.90  # 52週高値からの距離（高値の90%以上＝-10%以内）
-EARNINGS_BUFFER_DAYS = 7  # 決算前後の危険期間（前後7日を除外）
+HIGH_52W_RATIO = 0.90  # 52週高値からの距離（-10%以内）
+MA50_DEV_MIN = 0.02  # 50日MA乖離率の下限 (+2%)
+MA50_DEV_MAX = 0.10  # 50日MA乖離率の上限 (+10%)
+EARNINGS_BUFFER_DAYS = 7  # 決算前後7日を除外
 
 TAKE_PROFIT_RATIO = 1.05  # 目標利確（+5%）
 STOP_LOSS_RATIO = 0.96  # 損切り（-4%）
@@ -36,13 +37,8 @@ def get_sp500_tickers():
         }
         response = requests.get(url, headers=headers)
         tables = pd.read_html(io.StringIO(response.text))
-
-        # 最初のテーブル（tables[0]）に銘柄リストが存在
         df = tables[0]
-        tickers = df['Symbol'].tolist()
-
-        # BRK.B や BF.B などのドット表記を yfinance 用にハイフンに変換 (BRK-B, BF-B)
-        tickers = [str(t).replace('.', '-') for t in tickers]
+        tickers = [str(t).replace('.', '-') for t in df['Symbol'].tolist()]
         print(f'取得完了: {len(tickers)} 銘柄')
         return tickers
     except Exception as e:
@@ -58,7 +54,6 @@ def is_near_earnings(ticker_obj) -> bool:
             return False
 
         now = pd.Timestamp.now(tz=timezone.utc)
-        # UTCタイムゾーンに合わせて日付計算
         for index in earnings_df.index:
             earning_date = pd.to_datetime(index)
             if earning_date.tzinfo is None:
@@ -66,19 +61,19 @@ def is_near_earnings(ticker_obj) -> bool:
 
             diff_days = abs((earning_date - now).days)
             if diff_days <= EARNINGS_BUFFER_DAYS:
-                return True  # 決算前後の危険期間に該当
+                return True
     except Exception:
         pass
     return False
 
 
 def check_swing_signal(ticker_symbol: str):
-    """高度なテクニカル＋モメンタム＋決算回避フィルター（米国株版）"""
+    """高度なテクニカル＋モメンタム＋決算回避＋50日線乖離率フィルター（米国株版）"""
     try:
         tk = yf.Ticker(ticker_symbol)
         df = tk.history(period='1y', interval='1d')
 
-        if df.empty or len(df) < 200:  # 200日移動平均計算用に最長データ必要
+        if df.empty or len(df) < 200:
             return None
 
         # 1. 移動平均線（25日, 50日, 200日）
@@ -86,7 +81,7 @@ def check_swing_signal(ticker_symbol: str):
         df['SMA50'] = df['Close'].rolling(window=50).mean()
         df['SMA200'] = df['Close'].rolling(window=200).mean()
 
-        # 2. 出来高平均（20日）と売買代金（USD）
+        # 2. 出来高平均（20日）と売買代金
         df['Vol_SMA20'] = df['Volume'].rolling(window=20).mean()
         df['Trading_Value'] = df['Close'] * df['Volume']
         df['Trading_Value_SMA20'] = df['Trading_Value'].rolling(window=20).mean()
@@ -98,7 +93,7 @@ def check_swing_signal(ticker_symbol: str):
         rs = gain / loss
         df['RSI'] = 100 - (100 / (1 + rs))
 
-        # 4. 52週高値（過去252営業日の最高値）
+        # 4. 52週高値
         high_52w = df['High'].tail(252).max()
 
         latest = df.iloc[-1]
@@ -115,31 +110,28 @@ def check_swing_signal(ticker_symbol: str):
         trading_value_sma20 = float(latest['Trading_Value_SMA20'])
         rsi_latest = float(latest['RSI'])
 
+        # 50日線乖離率の計算
+        ma50_dev = (close_price / sma50) - 1.0
+
         # --- 判定条件 ---
-        # ① トレンド順配列: 株価 > 50日線 かつ 50日線 > 200日線
         is_uptrend = (close_price > sma50) and (sma50 > sma200)
-
-        # ② 52週高値からの距離: -10%以内（高値の90%以上）
         is_near_52w_high = close_price >= (high_52w * HIGH_52W_RATIO)
-
-        # 押し目判定: 25日移動平均線の2%以内まで調整していること
+        is_proper_ma50_dev = MA50_DEV_MIN <= ma50_dev <= MA50_DEV_MAX
         is_dip = (prev_low <= sma25 * 1.02) and (close_price >= sma25 * 0.98)
 
-        # 流動性・出来高・RSI
         has_liquidity = trading_value_sma20 >= MIN_TRADING_VALUE_USD
         is_volume_up = vol_latest >= vol_sma20 * MIN_VOL_RATIO
         is_rsi_proper = RSI_MIN <= rsi_latest <= RSI_MAX
 
-        # すべてのテクニカル条件をクリアした場合のみ、決算日チェックを実行（処理速度最適化のため）
         if (
             is_uptrend
             and is_near_52w_high
+            and is_proper_ma50_dev
             and is_dip
             and has_liquidity
             and is_volume_up
             and is_rsi_proper
         ):
-            # ③ 決算前後7日以内の銘柄を除外
             if is_near_earnings(tk):
                 return None
 
@@ -147,6 +139,7 @@ def check_swing_signal(ticker_symbol: str):
                 'Ticker': ticker_symbol,
                 '現在株価($)': round(close_price, 2),
                 'RSI(14)': round(rsi_latest, 1),
+                '50日線乖離率': f'{round(ma50_dev * 100, 1)}%',
                 '出来高倍率': round(vol_latest / vol_sma20, 2),
                 '売買代金(M$)': round(trading_value_sma20 / 1_000_000, 1),
                 '52週高値比': f'{round((close_price / high_52w) * 100, 1)}%',
@@ -159,7 +152,6 @@ def check_swing_signal(ticker_symbol: str):
 
 
 if __name__ == '__main__':
-    # 1. S&P 500 銘柄リスト取得
     watch_list = get_sp500_tickers()
 
     results = []
@@ -171,13 +163,13 @@ if __name__ == '__main__':
         if signal:
             print(
                 f'\n【買シグナル】{signal["Ticker"]} | 株価: ${signal["現在株価($)"]}'
-                f' | RSI: {signal["RSI(14)"]} | 52週高値比: {signal["52週高値比"]}'
+                f' | 50日線乖離: {signal["50日線乖離率"]} | RSI:'
+                f' {signal["RSI(14)"]}'
             )
             results.append(signal)
 
     print('\n--- スクリーニング完了 ---')
 
-    # 2. 結果のCSV保存
     if results:
         result_df = pd.DataFrame(results)
         filename = "us_sp500_results.csv"
